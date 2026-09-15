@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/json"
 	"errors"
@@ -28,9 +29,15 @@ func newServer(cfg config, m *Manager) http.Handler {
 	web, _ := fs.Sub(webFS, "web")
 	static := func(name, ctype string) http.HandlerFunc {
 		b, _ := fs.ReadFile(web, name)
+		etag := fmt.Sprintf(`"%x"`, sha256.Sum256(b))
 		return func(w http.ResponseWriter, r *http.Request) {
 			w.Header().Set("Content-Type", ctype)
-			w.Header().Set("Cache-Control", "public, max-age=300")
+			w.Header().Set("Cache-Control", "no-cache")
+			w.Header().Set("ETag", etag)
+			if r.Header.Get("If-None-Match") == etag {
+				w.WriteHeader(http.StatusNotModified)
+				return
+			}
 			w.Write(b)
 		}
 	}
