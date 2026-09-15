@@ -1,0 +1,36 @@
+services:
+  yt:
+    build: .
+    image: yt:latest
+    container_name: yt
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:8190:8080"
+    env_file:
+      - path: .env
+        required: false
+    dns: [1.1.1.1, 8.8.8.8]
+    read_only: true
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
+    pids_limit: 256
+    mem_limit: 2g
+    cpus: 2
+    tmpfs:
+      - /tmp:size=512m,nosuid,nodev
+    volumes:
+      - data:/data
+    networks:
+      - yt
+
+networks:
+  yt:
+    driver_opts:
+      com.docker.network.bridge.name: br-yt
+    ipam:
+      config:
+        - subnet: 172.30.90.0/24
+
+volumes:
+  data:

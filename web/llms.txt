@@ -1,0 +1,114 @@
+# yt
+
+> Small HTTP API over yt-dlp. Resolve metadata for any of the ~1800 sites yt-dlp supports, run download jobs with live progress (SSE or polling) and fetch the resulting file. Base URL: https://yt.mnl.rocks. Source: https://github.com/giulianoo0/yt
+
+All responses are JSON unless noted. CORS is open. If the instance sets API_KEY, send `Authorization: Bearer <key>` (or `?key=<key>` where headers are impossible, e.g. EventSource).
+
+Errors always look like:
+{"error": {"code": "invalid_request", "message": "url must be an absolute http(s) url"}}
+Codes: invalid_request (400), unauthorized (401), not_found (404), not_ready (409), gone (410), ytdlp_error (422), queue_full (429), timeout (504), internal (500).
+
+## Quick start
+
+1. POST /v1/jobs {"url": "..."} -> 202 job
+2. GET /v1/jobs/{id}/events (SSE) until status is done|failed|canceled
+3. GET /v1/jobs/{id}/file
+
+One-shot alternative: GET /v1/download?url=... blocks until the file is ready and streams it.
+
+## Routes
+
+### GET /healthz
+-> 200 {"ok": true, "yt_dlp": "2026.08.19"}
+
+### GET /v1/info?url=URL[&playlist=1][&raw=1]
+Extract metadata without downloading.
+- url (required): page url
+- playlist: 1 to resolve the playlist when the url has both a video and a list
+- raw: 1 to return the untouched `yt-dlp -J` output
+-> 200 {
+  "_type": "video" | "playlist",
+  "id", "title", "description", "uploader", "channel", "channel_url", "upload_date" (YYYYMMDD),
+  "duration" (seconds), "view_count", "like_count", "is_live", "thumbnail", "extractor_key", "webpage_url",
+  "formats": [{"format_id", "ext", "resolution", "width", "height", "fps", "vcodec", "acodec", "filesize", "filesize_approx", "tbr", "protocol", "format_note"}],
+  "playlist_count", "entries": [{"id", "title", "url", "webpage_url", "duration", "uploader", "thumbnail"}]
+}
+Fields are omitted when unknown. Playlists are flat (entries are not resolved).
+
+### GET /v1/extractors
+-> 200 {"count": 1800, "extractors": ["youtube", "twitter", ...]}
+
+### POST /v1/jobs
+Start a download. Body is JSON (`Content-Type: application/json`) or form/query params with the same names.
+Options (all optional except url):
+- url: string, page or direct media url
+- quality: "best" (default) | "audio" | max height like "2160", "1080", "720p"
+- codec: "any" (default) | "h264" (h264+aac, best browser compatibility) | "hevc" | "vp9" | "av1". Preference with fallback, never fails because of it
+- container: "mp4" | "webm" | "mkv" | "mov". Merge/remux target
+- audio_only: bool. Extract audio
+- audio_format: "best" | "mp3" | "m4a" | "aac" | "opus" | "vorbis" | "flac" | "wav" | "alac" (with audio_only)
+- format: raw yt-dlp format selector (-f), overrides quality/codec. e.g. "bv*[height<=720]+ba/b"
+- sort: raw yt-dlp format sort (-S). e.g. "res:1080,vcodec:h264"
+- start, end: trim, seconds or [hh:]mm:ss. e.g. "30", "1:02:10"
+- subtitles: ["en", "pt.*"] embed subtitle languages
+- embed_metadata, embed_thumbnail, embed_chapters: bool
+- sponsorblock_remove: ["sponsor", "selfpromo", "intro", "outro", "interaction", "music_offtopic"]
+- playlist_item: int, 1-based item to download when url is a playlist (default: the video only, playlists are ignored)
+- args: ["--flag", "value"] extra raw yt-dlp args. Flags touching the filesystem, execution, config or output (-o, -P, --exec, --cookies, --print, ...) are rejected.
+-> 202 Job, with Location header
+
+Example:
+curl -X POST https://yt.mnl.rocks/v1/jobs -H 'content-type: application/json' \
+  -d '{"url":"https://youtu.be/jNQXAC9IVRw","quality":"1080","codec":"h264","container":"mp4"}'
+
+### Job object
+{
+  "id": "8bf05386f9952365df",
+  "status": "queued" | "running" | "done" | "failed" | "canceled",
+  "stage": "queued" | "resolving" | "downloading" | "processing",   (absent when finished)
+  "options": {...echo of the request},
+  "media": {"id", "title", "extractor", "webpage_url", "thumbnail", "duration"},   (once resolved)
+  "progress": {
+    "percent": 55.6,              0-100, covers all parts (video + audio)
+    "downloaded_bytes": 74865810,
+    "total_bytes": 134589086,     estimate, may grow while downloading
+    "speed": 40995599.4,          bytes/s
+    "eta": 1,                     seconds
+    "part": 1, "parts": 2         current stream / streams to fetch
+  },
+  "file": {"name": "Me at the zoo [jNQXAC9IVRw].mp4", "size": 744412, "content_type": "video/mp4"},   (when done)
+  "error": {"code", "message"},   (when failed)
+  "links": {"self": "/v1/jobs/{id}", "events": "/v1/jobs/{id}/events", "file": "/v1/jobs/{id}/file"},
+  "created_at", "updated_at"      RFC 3339
+}
+After "downloading" reaches ~100% the job may sit in "processing" (merge, remux, audio extraction) before "done".
+Finished jobs and their files expire after JOB_TTL (default 1h); jobs survive server restarts.
+
+### GET /v1/jobs/{id}
+Poll the job. -> 200 Job
+
+### GET /v1/jobs/{id}/events
+Server-Sent Events (text/event-stream). Preferred over polling.
+- `event: job` with the full Job as data, sent immediately and on every change (throttled to ~7/s)
+- `event: end` once the job is terminal, then the stream closes
+- `: ping` comments every 15s
+
+JS:
+const es = new EventSource(`https://yt.mnl.rocks/v1/jobs/${id}/events`)
+es.addEventListener('job', (e) => { const job = JSON.parse(e.data); render(job.progress.percent) })
+es.addEventListener('end', () => es.close())
+
+### GET /v1/jobs/{id}/file[?inline=1]
+The downloaded file. Supports Range requests. Content-Disposition attachment (inline with inline=1).
+-> 200/206 bytes, 409 {"error": {"code": "not_ready"}, "job": Job} while not done, 410 if the file expired.
+
+### DELETE /v1/jobs/{id}
+Cancel a running job or delete a finished one and its file. -> 204
+
+### GET /v1/download?url=URL[&quality=...&codec=...&container=...&audio_only=1&audio_format=...&format=...&sort=...&start=...&end=...&subtitles=en,pt&embed_metadata=1&embed_thumbnail=1&embed_chapters=1&sponsorblock_remove=sponsor&playlist_item=N&arg=--flag&arg=value]
+Synchronous: creates a job, waits, streams the file. Closing the connection cancels the job. No progress; use jobs for that.
+curl -OJ 'https://yt.mnl.rocks/v1/download?url=https://youtu.be/jNQXAC9IVRw&audio_only=1&audio_format=mp3'
+
+## Other
+- GET /openapi.json: OpenAPI 3.1 spec
+- GET /llms.txt, /docs.txt: this file

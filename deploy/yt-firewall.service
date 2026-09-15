@@ -1,0 +1,12 @@
+[Unit]
+Description=Block yt container egress to private networks
+After=docker.service
+PartOf=docker.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/opt/yt/deploy/firewall.sh
+
+[Install]
+WantedBy=docker.service

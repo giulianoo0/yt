@@ -1,0 +1,10 @@
+[Unit]
+Description=Rebuild yt with latest yt-dlp
+After=docker.service
+
+[Service]
+Type=oneshot
+WorkingDirectory=/opt/yt
+ExecStart=/usr/bin/git pull --ff-only
+ExecStart=/usr/bin/docker compose build --pull --no-cache
+ExecStart=/usr/bin/docker compose up -d

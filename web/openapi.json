@@ -1,0 +1,940 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "yt",
+    "version": "1.0.0",
+    "description": "Small HTTP API over yt-dlp. Agent-friendly docs at /llms.txt.",
+    "license": {
+      "name": "MIT"
+    }
+  },
+  "servers": [
+    {
+      "url": "https://yt.mnl.rocks"
+    }
+  ],
+  "security": [
+    {},
+    {
+      "bearer": []
+    }
+  ],
+  "paths": {
+    "/healthz": {
+      "get": {
+        "summary": "Health",
+        "security": [],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "ok": {
+                      "type": "boolean"
+                    },
+                    "yt_dlp": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/info": {
+      "get": {
+        "summary": "Extract metadata",
+        "parameters": [
+          {
+            "name": "url",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Page URL"
+          },
+          {
+            "name": "playlist",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "boolean"
+            },
+            "description": "Resolve playlist when url has video+list"
+          },
+          {
+            "name": "raw",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "boolean"
+            },
+            "description": "Return raw yt-dlp -J output"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Metadata",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Info"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "422": {
+            "$ref": "#/components/responses/Error"
+          },
+          "504": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/v1/extractors": {
+      "get": {
+        "summary": "Supported extractors",
+        "responses": {
+          "200": {
+            "description": "List",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "count": {
+                      "type": "integer"
+                    },
+                    "extractors": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/jobs": {
+      "post": {
+        "summary": "Create download job",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Options"
+              }
+            },
+            "application/x-www-form-urlencoded": {
+              "schema": {
+                "$ref": "#/components/schemas/Options"
+              }
+            }
+          }
+        },
+        "responses": {
+          "202": {
+            "description": "Job",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Job"
+                }
+              }
+            },
+            "headers": {
+              "Location": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "429": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/v1/jobs/{id}": {
+      "get": {
+        "summary": "Get job (polling)",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Job",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Job"
+                }
+              }
+            }
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      },
+      "delete": {
+        "summary": "Cancel or delete job",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Deleted"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/v1/jobs/{id}/events": {
+      "get": {
+        "summary": "Job progress stream (SSE)",
+        "description": "`event: job` with Job JSON on every change, `event: end` when terminal, `: ping` every 15s.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "text/event-stream",
+            "content": {
+              "text/event-stream": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/v1/jobs/{id}/file": {
+      "get": {
+        "summary": "Download result",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "inline",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "boolean"
+            },
+            "description": "Content-Disposition inline"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "File bytes",
+            "content": {
+              "application/octet-stream": {
+                "schema": {
+                  "type": "string",
+                  "contentMediaType": "application/octet-stream"
+                }
+              }
+            }
+          },
+          "206": {
+            "description": "Partial content"
+          },
+          "409": {
+            "description": "Not ready",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "$ref": "#/components/schemas/ErrorBody"
+                    },
+                    "job": {
+                      "$ref": "#/components/schemas/Job"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          },
+          "410": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/v1/download": {
+      "get": {
+        "summary": "Synchronous download",
+        "description": "Creates a job, waits and streams the file. Accepts every Options field as query param (lists comma-separated, args as repeated `arg`).",
+        "parameters": [
+          {
+            "name": "url",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Page URL"
+          },
+          {
+            "name": "quality",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "codec",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "container",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "audio_format",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "format",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "sort",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "start",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "end",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "subtitles",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "sponsorblock_remove",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "audio_only",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "boolean"
+            }
+          },
+          {
+            "name": "embed_metadata",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "boolean"
+            }
+          },
+          {
+            "name": "embed_thumbnail",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "boolean"
+            }
+          },
+          {
+            "name": "embed_chapters",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "boolean"
+            }
+          },
+          {
+            "name": "playlist_item",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer"
+            }
+          },
+          {
+            "name": "arg",
+            "in": "query",
+            "schema": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "explode": true
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "File bytes",
+            "content": {
+              "application/octet-stream": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "422": {
+            "$ref": "#/components/responses/Error"
+          },
+          "429": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "securitySchemes": {
+      "bearer": {
+        "type": "http",
+        "scheme": "bearer",
+        "description": "Only when the instance sets API_KEY. `?key=` also accepted."
+      }
+    },
+    "schemas": {
+      "Options": {
+        "type": "object",
+        "required": [
+          "url"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "url": {
+            "type": "string",
+            "format": "uri",
+            "description": "Page or direct media URL"
+          },
+          "quality": {
+            "type": "string",
+            "description": "best (default), audio, or max height like 1080",
+            "examples": [
+              "best",
+              "audio",
+              "2160",
+              "1080",
+              "720"
+            ]
+          },
+          "codec": {
+            "type": "string",
+            "enum": [
+              "any",
+              "h264",
+              "hevc",
+              "vp9",
+              "av1"
+            ],
+            "description": "Codec preference with fallback. h264 = h264+aac for browser compatibility"
+          },
+          "container": {
+            "type": "string",
+            "enum": [
+              "mp4",
+              "webm",
+              "mkv",
+              "mov"
+            ]
+          },
+          "audio_only": {
+            "type": "boolean"
+          },
+          "audio_format": {
+            "type": "string",
+            "enum": [
+              "best",
+              "mp3",
+              "m4a",
+              "aac",
+              "opus",
+              "vorbis",
+              "flac",
+              "wav",
+              "alac"
+            ]
+          },
+          "format": {
+            "type": "string",
+            "description": "Raw yt-dlp format selector (-f). Overrides quality/codec"
+          },
+          "sort": {
+            "type": "string",
+            "description": "Raw yt-dlp format sort (-S)"
+          },
+          "start": {
+            "type": "string",
+            "description": "Trim start, seconds or [hh:]mm:ss"
+          },
+          "end": {
+            "type": "string",
+            "description": "Trim end, seconds or [hh:]mm:ss"
+          },
+          "subtitles": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Subtitle languages to embed"
+          },
+          "embed_metadata": {
+            "type": "boolean"
+          },
+          "embed_thumbnail": {
+            "type": "boolean"
+          },
+          "embed_chapters": {
+            "type": "boolean"
+          },
+          "sponsorblock_remove": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "examples": [
+              [
+                "sponsor",
+                "selfpromo"
+              ]
+            ]
+          },
+          "playlist_item": {
+            "type": "integer",
+            "minimum": 1,
+            "description": "1-based playlist item; default ignores playlists"
+          },
+          "args": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Extra raw yt-dlp args. Filesystem/exec/config/output flags are rejected"
+          }
+        }
+      },
+      "Job": {
+        "type": "object",
+        "required": [
+          "id",
+          "status",
+          "options",
+          "progress",
+          "links",
+          "created_at",
+          "updated_at"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "queued",
+              "running",
+              "done",
+              "failed",
+              "canceled"
+            ]
+          },
+          "stage": {
+            "type": "string",
+            "enum": [
+              "queued",
+              "resolving",
+              "downloading",
+              "processing"
+            ]
+          },
+          "options": {
+            "$ref": "#/components/schemas/Options"
+          },
+          "media": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "title": {
+                "type": "string"
+              },
+              "extractor": {
+                "type": "string"
+              },
+              "webpage_url": {
+                "type": "string"
+              },
+              "thumbnail": {
+                "type": "string"
+              },
+              "duration": {
+                "type": "number"
+              }
+            }
+          },
+          "progress": {
+            "type": "object",
+            "required": [
+              "percent",
+              "downloaded_bytes"
+            ],
+            "properties": {
+              "percent": {
+                "type": "number",
+                "minimum": 0,
+                "maximum": 100
+              },
+              "downloaded_bytes": {
+                "type": "integer"
+              },
+              "total_bytes": {
+                "type": "integer"
+              },
+              "speed": {
+                "type": "number",
+                "description": "bytes/s"
+              },
+              "eta": {
+                "type": "integer",
+                "description": "seconds"
+              },
+              "part": {
+                "type": "integer"
+              },
+              "parts": {
+                "type": "integer"
+              }
+            }
+          },
+          "file": {
+            "type": "object",
+            "properties": {
+              "name": {
+                "type": "string"
+              },
+              "size": {
+                "type": "integer"
+              },
+              "content_type": {
+                "type": "string"
+              }
+            }
+          },
+          "error": {
+            "$ref": "#/components/schemas/ErrorBody"
+          },
+          "links": {
+            "type": "object",
+            "properties": {
+              "self": {
+                "type": "string"
+              },
+              "events": {
+                "type": "string"
+              },
+              "file": {
+                "type": "string"
+              }
+            }
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "Info": {
+        "type": "object",
+        "properties": {
+          "_type": {
+            "type": "string",
+            "enum": [
+              "video",
+              "playlist",
+              "url"
+            ]
+          },
+          "id": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "description": {
+            "type": "string"
+          },
+          "uploader": {
+            "type": "string"
+          },
+          "channel": {
+            "type": "string"
+          },
+          "channel_url": {
+            "type": "string"
+          },
+          "upload_date": {
+            "type": "string"
+          },
+          "thumbnail": {
+            "type": "string"
+          },
+          "extractor_key": {
+            "type": "string"
+          },
+          "webpage_url": {
+            "type": "string"
+          },
+          "duration": {
+            "type": "number"
+          },
+          "view_count": {
+            "type": "integer"
+          },
+          "like_count": {
+            "type": "integer"
+          },
+          "is_live": {
+            "type": "boolean"
+          },
+          "playlist_count": {
+            "type": "integer"
+          },
+          "formats": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "format_id": {
+                  "type": "string"
+                },
+                "ext": {
+                  "type": "string"
+                },
+                "resolution": {
+                  "type": "string"
+                },
+                "vcodec": {
+                  "type": "string"
+                },
+                "acodec": {
+                  "type": "string"
+                },
+                "protocol": {
+                  "type": "string"
+                },
+                "format_note": {
+                  "type": "string"
+                },
+                "width": {
+                  "type": "integer"
+                },
+                "height": {
+                  "type": "integer"
+                },
+                "filesize": {
+                  "type": "integer"
+                },
+                "filesize_approx": {
+                  "type": "integer"
+                },
+                "fps": {
+                  "type": "number"
+                },
+                "tbr": {
+                  "type": "number"
+                }
+              }
+            }
+          },
+          "entries": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string"
+                },
+                "title": {
+                  "type": "string"
+                },
+                "url": {
+                  "type": "string"
+                },
+                "webpage_url": {
+                  "type": "string"
+                },
+                "uploader": {
+                  "type": "string"
+                },
+                "thumbnail": {
+                  "type": "string"
+                },
+                "duration": {
+                  "type": "number"
+                }
+              }
+            }
+          }
+        }
+      },
+      "ErrorBody": {
+        "type": "object",
+        "required": [
+          "code",
+          "message"
+        ],
+        "properties": {
+          "code": {
+            "type": "string",
+            "enum": [
+              "invalid_request",
+              "unauthorized",
+              "not_found",
+              "not_ready",
+              "gone",
+              "ytdlp_error",
+              "queue_full",
+              "timeout",
+              "internal",
+              "interrupted",
+              "canceled",
+              "no_file"
+            ]
+          },
+          "message": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "responses": {
+      "Error": {
+        "description": "Error",
+        "content": {
+          "application/json": {
+            "schema": {
+              "type": "object",
+              "properties": {
+                "error": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}
