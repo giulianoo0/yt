@@ -53,7 +53,7 @@ Options (all optional except url):
 - subtitles: ["en", "pt.*"] embed subtitle languages
 - embed_metadata, embed_thumbnail, embed_chapters: bool
 - sponsorblock_remove: ["sponsor", "selfpromo", "intro", "outro", "interaction", "music_offtopic"]
-- playlist_item: int, 1-based item to download when url is a playlist (default: the video only, playlists are ignored)
+- playlist_item: int, 1-based item to download when url is a playlist (default: the video itself, or the first item of a pure playlist)
 - args: ["--flag", "value"] extra raw yt-dlp args. Flags touching the filesystem, execution, config or output (-o, -P, --exec, --cookies, --print, ...) are rejected.
 -> 202 Job, with Location header
 

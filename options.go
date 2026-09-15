@@ -221,7 +221,7 @@ func (o Options) args(cfg config) []string {
 	if o.PlaylistItem > 0 {
 		a = append(a, "--yes-playlist", "--playlist-items", strconv.Itoa(o.PlaylistItem))
 	} else {
-		a = append(a, "--no-playlist")
+		a = append(a, "--no-playlist", "--playlist-items", "1")
 	}
 	if cfg.maxFilesize != "" {
 		a = append(a, "--max-filesize", cfg.maxFilesize)
