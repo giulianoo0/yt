@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log"
 	"mime"
 	"os"
@@ -121,10 +122,12 @@ func (j *Job) persist() {
 
 type Manager struct {
 	cfg    config
+	ctl    *Control
+	pool   *Pool
+	slots  *slots
 	root   string
 	mu     sync.RWMutex
 	jobs   map[string]*Job
-	sem    chan struct{}
 	ctx    context.Context
 	cancel context.CancelFunc
 	wg     sync.WaitGroup
@@ -132,17 +135,20 @@ type Manager struct {
 
 var errQueueFull = errors.New("queue is full")
 
-func newManager(cfg config) *Manager {
+func newManager(cfg config, ctl *Control, pool *Pool) *Manager {
 	ctx, cancel := context.WithCancel(context.Background())
 	m := &Manager{
 		cfg:    cfg,
+		ctl:    ctl,
+		pool:   pool,
+		slots:  newSlots(func() int { return ctl.get().MaxJobs }),
 		root:   filepath.Join(cfg.dataDir, "jobs"),
 		jobs:   map[string]*Job{},
-		sem:    make(chan struct{}, cfg.maxJobs),
 		ctx:    ctx,
 		cancel: cancel,
 	}
 	os.MkdirAll(m.root, 0o755)
+	ctl.onChange = append(ctl.onChange, func(Settings) { m.slots.wake() })
 	m.restore()
 	return m
 }
@@ -196,7 +202,7 @@ func (m *Manager) create(o Options) (*Job, error) {
 			active++
 		}
 	}
-	if active >= m.cfg.maxJobs+m.cfg.maxQueue {
+	if s := m.ctl.get(); active >= s.MaxJobs+s.MaxQueue {
 		m.mu.Unlock()
 		return nil, errQueueFull
 	}
@@ -212,6 +218,7 @@ func (m *Manager) create(o Options) (*Job, error) {
 	}
 	m.jobs[id] = j
 	m.mu.Unlock()
+	m.ctl.stats.add("jobs_created", 1)
 
 	if err := os.MkdirAll(j.dir, 0o755); err != nil {
 		m.remove(id)
@@ -290,29 +297,118 @@ func (m *Manager) shutdown() {
 }
 
 func (m *Manager) fail(j *Job, code, msg string) {
+	failed := false
 	j.update(true, func(v *JobView) {
 		if v.Status != StatusCanceled {
 			v.Status, v.Stage = StatusFailed, ""
 			v.Error = &apiError{code, msg}
+			failed = true
 		}
 	})
+	if failed {
+		m.ctl.stats.add("jobs_failed", 1)
+	} else {
+		m.ctl.stats.add("jobs_canceled", 1)
+	}
+}
+
+func (m *Manager) active() (running, queued int) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	for _, j := range m.jobs {
+		v, _ := j.snapshot()
+		switch v.Status {
+		case StatusRunning:
+			running++
+		case StatusQueued:
+			queued++
+		}
+	}
+	return
+}
+
+func (m *Manager) cancelAll() int {
+	m.mu.RLock()
+	var ids []string
+	for id, j := range m.jobs {
+		if v, _ := j.snapshot(); !v.terminal() {
+			ids = append(ids, id)
+		}
+	}
+	m.mu.RUnlock()
+	for _, id := range ids {
+		m.cancelJob(id)
+	}
+	return len(ids)
+}
+
+// slots is a concurrency gate whose limit can change at runtime.
+type slots struct {
+	mu    sync.Mutex
+	used  int
+	limit func() int
+	ch    chan struct{}
+}
+
+func newSlots(limit func() int) *slots {
+	return &slots{limit: limit, ch: make(chan struct{})}
+}
+
+func (s *slots) acquire(ctx context.Context) bool {
+	for {
+		s.mu.Lock()
+		if s.used < s.limit() {
+			s.used++
+			s.mu.Unlock()
+			return true
+		}
+		ch := s.ch
+		s.mu.Unlock()
+		select {
+		case <-ch:
+		case <-ctx.Done():
+			return false
+		}
+	}
+}
+
+func (s *slots) release() {
+	s.mu.Lock()
+	s.used--
+	s.mu.Unlock()
+	s.wake()
+}
+
+func (s *slots) wake() {
+	s.mu.Lock()
+	close(s.ch)
+	s.ch = make(chan struct{})
+	s.mu.Unlock()
 }
 
 func (m *Manager) run(ctx context.Context, j *Job) {
-	select {
-	case m.sem <- struct{}{}:
-		defer func() { <-m.sem }()
-	case <-ctx.Done():
+	if !m.slots.acquire(ctx) {
 		m.fail(j, "timeout", "job expired while queued")
 		return
 	}
+	defer m.slots.release()
 	if ctx.Err() != nil {
 		return
 	}
 	v, _ := j.snapshot()
+	account, cookies := "", ""
+	if isYouTube(v.Options.URL) {
+		id, path, wait, err := m.pool.Acquire()
+		if err != nil {
+			m.ctl.stats.add("youtube_exhausted", 1)
+			m.fail(j, "upstream_cooldown", fmt.Sprintf("%s, retry in %s", err, wait.Round(time.Second)))
+			return
+		}
+		account, cookies = id, path
+	}
 	j.update(true, func(v *JobView) { v.Status, v.Stage = StatusRunning, "resolving" })
 
-	args := append(v.Options.args(m.cfg),
+	args := append(v.Options.args(m.cfg, m.ctl.get(), cookies),
 		"--newline", "--progress", "--no-simulate", "--no-mtime",
 		"-P", j.dir, "-o", "%(title).120B [%(id)s].%(ext)s",
 		"--print", "before_dl:META %(.{id,title,duration,extractor_key,webpage_url,thumbnail,filesize,filesize_approx})j",
@@ -430,7 +526,9 @@ func (m *Manager) run(ctx context.Context, j *Job) {
 		m.fail(j, "canceled", "job was canceled")
 		return
 	case err != nil:
-		m.fail(j, "ytdlp_error", stderr.lastError())
+		msg := stderr.lastError()
+		m.pool.NoteFailure(account, msg)
+		m.fail(j, "ytdlp_error", msg)
 		return
 	}
 	st, err := os.Stat(file)
@@ -439,6 +537,7 @@ func (m *Manager) run(ctx context.Context, j *Job) {
 		if msg == "" {
 			msg = "yt-dlp finished without producing a file (too large or unavailable?)"
 		}
+		m.pool.NoteFailure(account, msg)
 		m.fail(j, "no_file", msg)
 		return
 	}
@@ -451,6 +550,11 @@ func (m *Manager) run(ctx context.Context, j *Job) {
 		v.Progress.Speed, v.Progress.ETA = 0, 0
 		v.File = &FileInfo{Name: filepath.Base(file), Size: st.Size(), ContentType: contentType(file)}
 	})
+	m.ctl.stats.add("jobs_done", 1)
+	m.ctl.stats.add("bytes_produced", st.Size())
+	if v, _ := j.snapshot(); v.Media != nil {
+		m.ctl.stats.extractor(v.Media.Extractor)
+	}
 }
 
 func atoi(s string) int64 {

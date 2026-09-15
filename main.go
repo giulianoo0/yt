@@ -20,21 +20,21 @@ import (
 var webFS embed.FS
 
 type config struct {
-	addr         string
-	apiKey       string
-	dataDir      string
-	bin          string
-	cookies      string
-	proxy        string
-	cors         string
-	maxFilesize  string
-	maxJobs      int
-	maxQueue     int
-	jobTTL       time.Duration
-	timeout      time.Duration
-	allowArgs    bool
-	allowPrivate bool
-	extraArgs    []string
+	addr           string
+	apiKey         string
+	dataDir        string
+	bin            string
+	cookies        string
+	proxy          string
+	cors           string
+	maxFilesize    string
+	adminToken     string
+	clientIPHeader string
+	jobTTL         time.Duration
+	timeout        time.Duration
+	allowArgs      bool
+	allowPrivate   bool
+	extraArgs      []string
 }
 
 func env(key, def string) string {
@@ -67,21 +67,21 @@ func envBool(key string, def bool) bool {
 
 func loadConfig() config {
 	return config{
-		addr:         env("ADDR", ":8080"),
-		apiKey:       os.Getenv("API_KEY"),
-		dataDir:      env("DATA_DIR", filepath.Join(os.TempDir(), "yt")),
-		bin:          env("YTDLP_BIN", "yt-dlp"),
-		cookies:      os.Getenv("COOKIES_FILE"),
-		proxy:        os.Getenv("PROXY"),
-		cors:         env("CORS_ORIGIN", "*"),
-		maxFilesize:  os.Getenv("MAX_FILESIZE"),
-		maxJobs:      max(1, envInt("MAX_JOBS", 3)),
-		maxQueue:     max(1, envInt("MAX_QUEUE", 64)),
-		jobTTL:       envDur("JOB_TTL", time.Hour),
-		timeout:      envDur("JOB_TIMEOUT", 30*time.Minute),
-		allowArgs:    envBool("ALLOW_ARGS", true),
-		allowPrivate: envBool("ALLOW_PRIVATE", false),
-		extraArgs:    strings.Fields(os.Getenv("YTDLP_ARGS")),
+		addr:           env("ADDR", ":8080"),
+		apiKey:         os.Getenv("API_KEY"),
+		dataDir:        env("DATA_DIR", filepath.Join(os.TempDir(), "yt")),
+		bin:            env("YTDLP_BIN", "yt-dlp"),
+		cookies:        os.Getenv("COOKIES_FILE"),
+		proxy:          os.Getenv("PROXY"),
+		cors:           env("CORS_ORIGIN", "*"),
+		maxFilesize:    os.Getenv("MAX_FILESIZE"),
+		adminToken:     os.Getenv("ADMIN_TOKEN"),
+		clientIPHeader: os.Getenv("CLIENT_IP_HEADER"),
+		jobTTL:         envDur("JOB_TTL", time.Hour),
+		timeout:        envDur("JOB_TIMEOUT", 30*time.Minute),
+		allowArgs:      envBool("ALLOW_ARGS", true),
+		allowPrivate:   envBool("ALLOW_PRIVATE", false),
+		extraArgs:      strings.Fields(os.Getenv("YTDLP_ARGS")),
 	}
 }
 
@@ -94,8 +94,11 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	m := newManager(cfg)
+	ctl := newControl(cfg)
+	pool := newPool(cfg.dataDir, ctl)
+	m := newManager(cfg, ctl, pool)
 	go m.janitor(ctx)
+	go ctl.stats.flushLoop(ctx)
 
 	srv := &http.Server{
 		Addr:              cfg.addr,

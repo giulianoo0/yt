@@ -2,11 +2,20 @@ FROM golang:1.25-alpine AS build
 WORKDIR /src
 COPY go.mod *.go ./
 COPY web ./web
-RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /yt .
+COPY cmd ./cmd
+RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /yt . \
+ && CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /ytbot ./cmd/ytbot
+
+FROM scratch AS bot
+COPY --from=build /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/
+COPY --from=build /ytbot /ytbot
+USER 10002
+EXPOSE 8081
+ENTRYPOINT ["/ytbot"]
 
 FROM denoland/deno:bin AS deno
 
-FROM python:3.13-slim
+FROM python:3.13-slim AS api
 RUN apt-get update \
  && apt-get install -y --no-install-recommends ffmpeg ca-certificates \
  && rm -rf /var/lib/apt/lists/* \

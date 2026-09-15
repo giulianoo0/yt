@@ -1,4 +1,5 @@
 .env
+.env.bot
 .git
 yt
 *.md

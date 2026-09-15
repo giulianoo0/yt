@@ -13,6 +13,7 @@ import (
 	"net/url"
 	"os"
 	"os/exec"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -21,11 +22,14 @@ import (
 type server struct {
 	cfg  config
 	m    *Manager
-	info chan struct{}
+	ctl  *Control
+	pool *Pool
+	info *slots
 }
 
 func newServer(cfg config, m *Manager) http.Handler {
-	s := &server{cfg: cfg, m: m, info: make(chan struct{}, cfg.maxJobs*2)}
+	s := &server{cfg: cfg, m: m, ctl: m.ctl, pool: m.pool}
+	s.info = newSlots(func() int { return s.ctl.get().MaxJobs * 2 })
 	web, _ := fs.Sub(webFS, "web")
 	static := func(name, ctype string) http.HandlerFunc {
 		b, _ := fs.ReadFile(web, name)
@@ -59,6 +63,7 @@ func newServer(cfg config, m *Manager) http.Handler {
 	v1.HandleFunc("GET /v1/jobs/{id}/file", s.file)
 	v1.HandleFunc("GET /v1/download", s.download)
 	mux.Handle("/v1/", s.auth(v1))
+	mux.Handle("/admin/", s.adminRoutes())
 
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusNotFound, "not_found", "no route for "+r.Method+" "+r.URL.Path)
@@ -143,14 +148,44 @@ func (s *server) health(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, status, map[string]any{"ok": v != "", "yt_dlp": v})
 }
 
+// admit applies pause, rate limits and the youtube pool before any work.
+func (s *server) admit(w http.ResponseWriter, r *http.Request, rawURL string) bool {
+	wait, err := s.ctl.admit(r)
+	if err == nil && isYouTube(rawURL) {
+		if d := s.pool.Wait(); d > 0 {
+			wait, err = d, errPoolExhausted
+		}
+	}
+	if err == nil {
+		return true
+	}
+	secs := max(1, int(wait.Round(time.Second).Seconds()))
+	w.Header().Set("Retry-After", strconv.Itoa(secs))
+	switch err {
+	case errPaused:
+		s.ctl.stats.add("paused_rejects", 1)
+		writeErr(w, http.StatusServiceUnavailable, "paused", "this instance is paused, try again later")
+	case errPoolExhausted:
+		s.ctl.stats.add("youtube_exhausted", 1)
+		writeErr(w, http.StatusServiceUnavailable, "upstream_cooldown", fmt.Sprintf("youtube is cooling down, retry in %ds", secs))
+	default:
+		s.ctl.stats.add("rate_limited", 1)
+		writeErr(w, http.StatusTooManyRequests, "rate_limited", fmt.Sprintf("slow down, retry in %ds", secs))
+	}
+	return false
+}
+
 func (s *server) createJob(w http.ResponseWriter, r *http.Request) {
 	o, err := decodeOptions(r)
 	if err != nil {
 		writeErr(w, http.StatusBadRequest, "invalid_request", "invalid body: "+err.Error())
 		return
 	}
-	if err := o.validate(s.cfg); err != nil {
+	if err := o.validate(s.cfg, s.ctl.get()); err != nil {
 		writeErr(w, http.StatusBadRequest, "invalid_request", err.Error())
+		return
+	}
+	if !s.admit(w, r, o.URL) {
 		return
 	}
 	j, err := s.m.create(o)
@@ -278,8 +313,11 @@ func asciiName(s string) string {
 
 func (s *server) download(w http.ResponseWriter, r *http.Request) {
 	o := optionsFromQuery(r.URL.Query())
-	if err := o.validate(s.cfg); err != nil {
+	if err := o.validate(s.cfg, s.ctl.get()); err != nil {
 		writeErr(w, http.StatusBadRequest, "invalid_request", err.Error())
+		return
+	}
+	if !s.admit(w, r, o.URL) {
 		return
 	}
 	j, err := s.m.create(o)
@@ -368,16 +406,38 @@ func (s *server) handleInfo(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "invalid_request", err.Error())
 		return
 	}
-	select {
-	case s.info <- struct{}{}:
-		defer func() { <-s.info }()
-	case <-r.Context().Done():
+	playlist := q.Get("playlist") == "true" || q.Get("playlist") == "1"
+	raw := q.Get("raw") == "1" || q.Get("raw") == "true"
+	s.ctl.stats.add("info_requests", 1)
+	key := fmt.Sprintf("%t|%t|%s", playlist, raw, u)
+	if body, ok := s.ctl.cache.get(key); ok {
+		s.ctl.stats.add("info_cache_hits", 1)
+		w.Header().Set("Content-Type", "application/json; charset=utf-8")
+		w.Header().Set("X-Cache", "hit")
+		w.Write(body)
 		return
+	}
+	if !s.admit(w, r, u) {
+		return
+	}
+	if !s.info.acquire(r.Context()) {
+		return
+	}
+	defer s.info.release()
+	account, cookies := "", ""
+	if isYouTube(u) {
+		id, path, wait, err := s.pool.Acquire()
+		if err != nil {
+			w.Header().Set("Retry-After", strconv.Itoa(max(1, int(wait.Seconds()))))
+			writeErr(w, http.StatusServiceUnavailable, "upstream_cooldown", err.Error())
+			return
+		}
+		account, cookies = id, path
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 90*time.Second)
 	defer cancel()
-	args := append([]string{"-J", "--no-warnings", "--flat-playlist"}, commonArgs(s.cfg)...)
-	if q.Get("playlist") != "true" && q.Get("playlist") != "1" {
+	args := append([]string{"-J", "--no-warnings", "--flat-playlist"}, commonArgs(s.cfg, s.ctl.get(), cookies)...)
+	if !playlist {
 		args = append(args, "--no-playlist")
 	}
 	args = append(args, "--", u)
@@ -390,10 +450,14 @@ func (s *server) handleInfo(w http.ResponseWriter, r *http.Request) {
 			writeErr(w, http.StatusGatewayTimeout, "timeout", "extraction timed out")
 			return
 		}
-		writeErr(w, http.StatusUnprocessableEntity, "ytdlp_error", stderr.lastError())
+		msg := stderr.lastError()
+		s.pool.NoteFailure(account, msg)
+		writeErr(w, http.StatusUnprocessableEntity, "ytdlp_error", msg)
 		return
 	}
-	if q.Get("raw") == "1" || q.Get("raw") == "true" {
+	ttl := time.Duration(s.ctl.get().InfoCacheTTL) * time.Second
+	if raw {
+		s.ctl.cache.put(key, out, ttl)
 		w.Header().Set("Content-Type", "application/json")
 		w.Write(out)
 		return
@@ -418,6 +482,9 @@ func (s *server) handleInfo(w http.ResponseWriter, r *http.Request) {
 	}
 	if in.Type == "playlist" && in.PlaylistCount == 0 {
 		in.PlaylistCount = len(in.Entries)
+	}
+	if body, err := json.Marshal(in); err == nil {
+		s.ctl.cache.put(key, append(body, '\n'), ttl)
 	}
 	writeJSON(w, http.StatusOK, in)
 }

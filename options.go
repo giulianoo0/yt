@@ -88,7 +88,7 @@ var deniedArgs = map[string]bool{
 	"--batch": true, "--load-pages": true, "--write-pages": true, "--js-runtimes": true, "--remote-components": true,
 }
 
-func (o *Options) validate(cfg config) error {
+func (o *Options) validate(cfg config, s Settings) error {
 	if o.Quality = strings.TrimSuffix(strings.ToLower(o.Quality), "p"); o.Quality != "" && o.Quality != "best" && o.Quality != "audio" {
 		if n, err := strconv.Atoi(o.Quality); err != nil || n < 100 || n > 4320 {
 			return errors.New("quality must be best, audio or a height like 1080")
@@ -116,7 +116,7 @@ func (o *Options) validate(cfg config) error {
 		}
 	}
 	if len(o.Args) > 0 {
-		if !cfg.allowArgs {
+		if !s.AllowArgs {
 			return errors.New("raw args are disabled on this instance")
 		}
 		for _, a := range o.Args {
@@ -179,7 +179,7 @@ func (o Options) formatSelector() string {
 	return fmt.Sprintf("bv*%s%s+ba%s/b%s%s/bv*%s+ba/b%s/bv*+ba/b", h, c[0], c[1], h, c[0], h, h)
 }
 
-func (o Options) args(cfg config) []string {
+func (o Options) args(cfg config, s Settings, cookies string) []string {
 	a := []string{"-f", o.formatSelector()}
 	if o.Sort != "" {
 		a = append(a, "-S", o.Sort)
@@ -223,17 +223,20 @@ func (o Options) args(cfg config) []string {
 	} else {
 		a = append(a, "--no-playlist", "--playlist-items", "1")
 	}
-	if cfg.maxFilesize != "" {
-		a = append(a, "--max-filesize", cfg.maxFilesize)
+	if s.MaxFilesize != "" {
+		a = append(a, "--max-filesize", s.MaxFilesize)
 	}
-	a = append(a, commonArgs(cfg)...)
+	a = append(a, commonArgs(cfg, s, cookies)...)
 	return append(a, o.Args...)
 }
 
-func commonArgs(cfg config) []string {
+func commonArgs(cfg config, s Settings, cookies string) []string {
 	a := []string{"--ignore-config", "--color", "never", "--cache-dir", cfg.dataDir + "/cache"}
-	if cfg.cookies != "" {
-		a = append(a, "--cookies", cfg.cookies)
+	if cookies != "" {
+		a = append(a, "--cookies", cookies)
+	}
+	if s.SleepRequests > 0 {
+		a = append(a, "--sleep-requests", strconv.FormatFloat(s.SleepRequests, 'f', -1, 64))
 	}
 	if cfg.proxy != "" {
 		a = append(a, "--proxy", cfg.proxy)
