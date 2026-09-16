@@ -131,6 +131,20 @@ func (o *Options) validate(cfg config, s Settings) error {
 	return checkURL(o.URL, cfg.allowPrivate)
 }
 
+// plain reports whether the request only picks a quality and can be served
+// by a native extractor: no trimming, subtitles, audio extraction or raw args.
+func (o Options) plain() bool {
+	return o.Format == "" && o.Sort == "" && !o.AudioOnly && o.Quality != "audio" && o.AudioFormat == "" &&
+		o.Start == "" && o.End == "" && len(o.Subtitles) == 0 && !o.EmbedMetadata && !o.EmbedThumbnail &&
+		!o.EmbedChapters && len(o.SponsorBlock) == 0 && o.PlaylistItem == 0 && len(o.Args) == 0 &&
+		(o.Container == "" || o.Container == "mp4")
+}
+
+func (o Options) maxHeight() int {
+	n, _ := strconv.Atoi(o.Quality)
+	return n
+}
+
 func isNumber(s string) bool {
 	_, err := strconv.ParseFloat(s, 64)
 	return err == nil

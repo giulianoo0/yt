@@ -5,7 +5,9 @@ small http api over [yt-dlp](https://github.com/yt-dlp/yt-dlp). go stdlib only, 
 - metadata for any site yt-dlp supports
 - download jobs with live progress over sse (or polling)
 - quality, codec, container, audio extraction, trimming, subtitles, sponsorblock, raw yt-dlp args
-- jobs persisted to disk, survive restarts, expire after a ttl
+- x, bluesky, mastodon, streamable, twitch clips and direct files are resolved natively in go, no yt-dlp
+- embed anything: put a link after the slash on x.mnl.rocks and paste it in discord, telegram, slack…
+- jobs persisted to disk, survive restarts; files are deleted 5 minutes after they are ready
 
 live at https://yt.mnl.rocks · docs for agents at [/llms.txt](https://yt.mnl.rocks/llms.txt) · spec at [/openapi.json](https://yt.mnl.rocks/openapi.json)
 
@@ -32,7 +34,17 @@ curl -OJ https://yt.mnl.rocks/v1/jobs/{id}/file
 | `GET /v1/jobs/{id}/file` | result, range requests ok |
 | `DELETE /v1/jobs/{id}` | cancel / delete |
 | `GET /v1/download?url=` | sync download |
+| `GET /v1/embed?url=` | embed metadata + player urls |
 | `GET /healthz` | health + yt-dlp version |
+
+## embed
+
+```
+https://x.mnl.rocks/https://x.com/jack/status/20
+https://x.mnl.rocks/youtu.be/jNQXAC9IVRw
+```
+
+the page carries `og:video` / `twitter:player` tags, so chat apps unfurl it into a player. youtube reuses youtube's own player; everything else gets a progressive mp4 served from `x.mnl.rocks/media?url=`, proxied straight from the origin when a native extractor knows the site and produced by a job otherwise. `/oembed?url=` on the same host, `/embed/<url>` on the main host does the same.
 
 ## run
 
@@ -56,7 +68,7 @@ go run .
 | `DATA_DIR` | `$TMPDIR/yt` | jobs and files |
 | `MAX_JOBS` | `3` | concurrent downloads |
 | `MAX_QUEUE` | `64` | queued jobs before 429 |
-| `JOB_TTL` | `1h` | finished job lifetime |
+| `JOB_TTL` | `5m` | how long finished files are kept |
 | `JOB_TIMEOUT` | `30m` | per job |
 | `MAX_FILESIZE` | | passed to `--max-filesize` |
 | `ALLOW_ARGS` | `true` | accept raw `args` |
@@ -65,10 +77,8 @@ go run .
 | `PROXY` | | `--proxy` |
 | `YTDLP_ARGS` | | extra args for every call |
 | `YTDLP_BIN` | `yt-dlp` | |
-
-## sandbox
-
-the container runs as a non-root user on a read-only rootfs with all capabilities dropped, `no-new-privileges`, pid/memory/cpu limits and its own bridge. `deploy/firewall.sh` drops egress from that bridge to private ranges and the host, so a compromised extractor can only reach the internet. `deploy/yt-update.timer` rebuilds daily to keep yt-dlp current.
+| `PUBLIC_URL` | request host | absolute base for links, e.g. `https://yt.mnl.rocks` |
+| `EMBED_HOST` | | host that serves embed pages at `/<url>`, e.g. `x.mnl.rocks` |
 
 ## license
 

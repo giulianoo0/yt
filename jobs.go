@@ -8,8 +8,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log"
 	"mime"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -194,6 +196,32 @@ func (m *Manager) get(id string) *Job {
 	return m.jobs[id]
 }
 
+// find returns a queued, running or done job with exactly these options, if any.
+func (m *Manager) find(o Options) *Job {
+	key, _ := json.Marshal(o)
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	var best *Job
+	for _, j := range m.jobs {
+		v, _ := j.snapshot()
+		if v.Status == StatusFailed || v.Status == StatusCanceled {
+			continue
+		}
+		if b, _ := json.Marshal(v.Options); string(b) != string(key) {
+			continue
+		}
+		if v.Status == StatusDone {
+			if _, err := os.Stat(j.path); err != nil {
+				continue
+			}
+		}
+		if best == nil || v.CreatedAt.After(best.v.CreatedAt) {
+			best = j
+		}
+	}
+	return best
+}
+
 func (m *Manager) create(o Options) (*Job, error) {
 	m.mu.Lock()
 	active := 0
@@ -269,7 +297,7 @@ func (m *Manager) remove(id string) {
 }
 
 func (m *Manager) janitor(ctx context.Context) {
-	t := time.NewTicker(time.Minute)
+	t := time.NewTicker(20 * time.Second)
 	defer t.Stop()
 	for {
 		select {
@@ -396,6 +424,14 @@ func (m *Manager) run(ctx context.Context, j *Job) {
 		return
 	}
 	v, _ := j.snapshot()
+	if v.Options.plain() {
+		if n, ok := resolveNative(ctx, v.Options.URL); ok {
+			j.update(true, func(v *JobView) { v.Status, v.Stage = StatusRunning, "resolving" })
+			if m.runNative(ctx, j, n) {
+				return
+			}
+		}
+	}
 	account, cookies := "", ""
 	if isYouTube(v.Options.URL) {
 		id, path, wait, err := m.pool.Acquire()
@@ -555,6 +591,147 @@ func (m *Manager) run(ctx context.Context, j *Job) {
 	if v, _ := j.snapshot(); v.Media != nil {
 		m.ctl.stats.extractor(v.Media.Extractor)
 	}
+}
+
+// runNative downloads a progressive file found by a native extractor with
+// plain http. It reports false to fall back to yt-dlp on any upstream error.
+func (m *Manager) runNative(ctx context.Context, j *Job, n *NativeMedia) bool {
+	o, _ := j.snapshot()
+	v := n.best(o.Options.maxHeight())
+	if v == nil {
+		return false
+	}
+	media := Media{ID: n.ID, Title: n.Title, Extractor: n.Provider, WebpageURL: n.WebpageURL, Thumbnail: n.Thumbnail, Duration: n.Duration}
+	j.update(true, func(v *JobView) { v.Media = &media })
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, v.URL, nil)
+	if err != nil {
+		return false
+	}
+	req.Header.Set("User-Agent", browserUA)
+	res, err := (&http.Client{Timeout: m.cfg.timeout}).Do(req)
+	if err != nil {
+		if ctx.Err() == nil {
+			log.Printf("native download %s: %v", v.URL, err)
+		}
+		return false
+	}
+	defer res.Body.Close()
+	if res.StatusCode != 200 {
+		log.Printf("native download %s: http %d", v.URL, res.StatusCode)
+		return false
+	}
+	total := res.ContentLength
+	if limit := parseSize(m.ctl.get().MaxFilesize); limit > 0 && total > limit {
+		m.fail(j, "no_file", fmt.Sprintf("file is larger than the %s limit", m.ctl.get().MaxFilesize))
+		return true
+	}
+	name := n.filename(v)
+	if ct := res.Header.Get("Content-Type"); ct != "" && v.ContentType == "" {
+		v.ContentType = ct
+	}
+	file := filepath.Join(j.dir, name)
+	f, err := os.Create(file)
+	if err != nil {
+		m.fail(j, "internal", err.Error())
+		return true
+	}
+	start := time.Now()
+	last, lastBytes := start, int64(0)
+	speed := 0.0
+	var done int64
+	buf := make([]byte, 256<<10)
+	for {
+		nr, rerr := res.Body.Read(buf)
+		if nr > 0 {
+			if _, werr := f.Write(buf[:nr]); werr != nil {
+				f.Close()
+				m.fail(j, "internal", werr.Error())
+				return true
+			}
+			done += int64(nr)
+			now := time.Now()
+			if dt := now.Sub(last).Seconds(); dt >= 0.5 {
+				inst := float64(done-lastBytes) / dt
+				if speed == 0 {
+					speed = inst
+				} else {
+					speed = speed*0.6 + inst*0.4
+				}
+				last, lastBytes = now, done
+			}
+			p := Progress{DownloadedBytes: done, TotalBytes: max(total, done), Speed: speed, Part: 1, Parts: 1}
+			if total > 0 {
+				p.Percent = min(99.9, float64(int(float64(done)*1000/float64(total)))/10)
+				if speed > 0 {
+					p.ETA = int(float64(total-done) / speed)
+				}
+			}
+			j.update(false, func(v *JobView) { v.Stage, v.Progress = "downloading", p })
+		}
+		if rerr == io.EOF {
+			break
+		}
+		if rerr != nil {
+			f.Close()
+			os.Remove(file)
+			if ctx.Err() != nil {
+				if ctx.Err() == context.DeadlineExceeded {
+					m.fail(j, "timeout", "job exceeded the time limit")
+				} else {
+					m.fail(j, "canceled", "job was canceled")
+				}
+				return true
+			}
+			log.Printf("native download %s: %v", v.URL, rerr)
+			return false
+		}
+	}
+	if err := f.Close(); err != nil {
+		m.fail(j, "internal", err.Error())
+		return true
+	}
+	if total > 0 && done != total {
+		os.Remove(file)
+		return false
+	}
+	ctype := v.ContentType
+	if ctype == "" {
+		ctype = contentType(file)
+	}
+	j.update(true, func(v *JobView) {
+		j.path = file
+		v.Status, v.Stage = StatusDone, ""
+		v.Progress = Progress{Percent: 100, DownloadedBytes: done, TotalBytes: done, Part: 1, Parts: 1}
+		v.File = &FileInfo{Name: name, Size: done, ContentType: ctype}
+	})
+	m.ctl.stats.add("jobs_done", 1)
+	m.ctl.stats.add("jobs_native", 1)
+	m.ctl.stats.add("bytes_produced", done)
+	m.ctl.stats.extractor(n.Provider)
+	return true
+}
+
+func parseSize(s string) int64 {
+	if s == "" || !sizeRe.MatchString(s) {
+		return 0
+	}
+	mult := int64(1)
+	switch s[len(s)-1] {
+	case 'K':
+		mult = 1 << 10
+	case 'M':
+		mult = 1 << 20
+	case 'G':
+		mult = 1 << 30
+	case 'T':
+		mult = 1 << 40
+	}
+	if mult > 1 {
+		s = s[:len(s)-1]
+	}
+	f, _ := strconv.ParseFloat(s, 64)
+	return int64(f * float64(mult))
 }
 
 func atoi(s string) int64 {
