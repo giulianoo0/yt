@@ -54,9 +54,8 @@ main { position: relative; max-width: 860px; margin: 0 auto; padding: 72px 24px 
 /* entrance */
 .reveal { animation: reveal .7s var(--ease) both; animation-delay: calc(var(--i, 0) * 70ms + 120ms); }
 @keyframes reveal { from { opacity: 0; filter: blur(8px); transform: translateY(6px); } }
-h1 { margin: 0; font-size: clamp(2.25rem, 4vw, 3rem); line-height: 1.2; color: #a5f3fc; font-weight: 700; }
-h1 span { display: inline-block; animation: letter .5s var(--ease) both; }
-h1 span:nth-child(2) { animation-delay: .05s; }
+h1 { margin: 0; font-size: clamp(2.25rem, 4vw, 3rem); line-height: 1.2; color: #a5f3fc; font-weight: 700; animation: letter .5s var(--ease) both; }
+h1 span { display: inline-block; }
 @keyframes letter { from { opacity: 0; transform: translateY(4px); filter: blur(6px); } }
 h1:hover span {
   background: linear-gradient(90deg, currentColor 0%, currentColor 40%, #fff 50%, currentColor 60%, currentColor 100%);
@@ -198,30 +197,88 @@ td:nth-child(2) { color: var(--violet); white-space: nowrap; }
 /* go button morphs into progress */
 .go {
   position: relative; overflow: hidden; display: flex; align-items: center; justify-content: center; gap: 10px;
-  width: 100%; height: 44px; border: 1px solid var(--fg); border-radius: 12px; background: var(--fg); color: #000;
+  width: 100%; height: 48px; border: 1px solid var(--fg); border-radius: 12px; background: var(--fg); color: #000;
   font-size: 13px; font-weight: 500;
-  transition: background .35s var(--ease), color .35s var(--ease), border-color .35s var(--ease), transform .15s;
+  transition: background .45s var(--ease), color .45s var(--ease), border-color .45s var(--ease), box-shadow .45s var(--ease), transform .15s;
 }
 .go:active:not(:disabled) { transform: scale(.99); }
 .go:disabled { cursor: default; }
-.go-fill { position: absolute; inset: 0; transform-origin: left; transform: scaleX(var(--p, 0)); background: rgba(127,180,202,.18); transition: transform .3s var(--ease), opacity .3s; opacity: 0; }
+.go-fill {
+  position: absolute; inset: 0; transform-origin: left; transform: scaleX(var(--p, 0)); opacity: 0;
+  background: linear-gradient(90deg, rgba(127,180,202,.10), rgba(127,180,202,.30));
+  transition: transform .9s cubic-bezier(.16, 1, .3, 1), opacity .35s var(--ease); will-change: transform;
+}
+.go.is-determinate .go-fill { opacity: 1; }
+.go-edge {
+  position: absolute; top: 0; bottom: 0; left: calc(var(--p, 0) * 100%); width: 1px; opacity: 0;
+  background: rgba(127,180,202,.9); box-shadow: 0 0 14px 2px rgba(127,180,202,.45);
+  transition: left .9s cubic-bezier(.16, 1, .3, 1), opacity .35s var(--ease);
+}
+.go.is-determinate .go-edge { opacity: 1; }
+.go.is-busy:not(.is-determinate) .go-label b, .go.is-busy:not(.is-determinate) .go-label i {
+  background: linear-gradient(90deg, currentColor 0%, currentColor 40%, #fff 50%, currentColor 60%, currentColor 100%);
+  background-size: 200% 100%; -webkit-background-clip: text; background-clip: text; -webkit-text-fill-color: transparent;
+  animation: shimmer 1.6s linear infinite;
+}
 .go-label { position: relative; display: flex; gap: 10px; align-items: center; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .go-label b { font-weight: 500; font-variant-numeric: tabular-nums; }
-.go-label i { font-style: normal; color: var(--n500); overflow: hidden; text-overflow: ellipsis; }
+.go-label i { font-style: normal; color: var(--n500); overflow: hidden; text-overflow: ellipsis; font-variant-numeric: tabular-nums; }
+.go-label .dl { flex: none; display: none; animation: dip 1.4s var(--ease) infinite; }
+@keyframes dip { 50% { transform: translateY(2px); } }
 .go.is-busy { background: var(--sumi); border-color: var(--wave); color: var(--fg); }
-.go.is-busy .go-fill { opacity: 1; }
-.go.is-done { background: rgba(152,187,108,.12); border-color: rgba(152,187,108,.5); color: var(--spring-green); }
+.go.is-done {
+  background: var(--spring-green); border-color: var(--spring-green); color: #0b1205;
+  box-shadow: 0 0 0 4px rgba(152,187,108,.14), 0 14px 44px rgba(152,187,108,.28);
+  animation: pop .5s var(--ease);
+}
+.go.is-done:hover { filter: brightness(1.06); }
 .go.is-done .go-fill { opacity: 0; }
+.go.is-done .go-label i { color: rgba(11,18,5,.6); }
+.go.is-done .go-label .dl { display: block; }
+@keyframes pop { 30% { transform: scale(1.015); } }
 .swap { animation: swap .35s var(--ease); }
 @keyframes swap { from { opacity: 0; filter: blur(4px); transform: translateY(3px); } }
 .cancel {
-  position: absolute; right: 6px; top: 50%; z-index: 2; width: 30px; height: 30px; margin-top: -15px;
+  position: absolute; right: 8px; top: 50%; z-index: 2; width: 30px; height: 30px; margin-top: -15px;
   display: grid; place-items: center; border: 0; border-radius: 8px; background: none; color: var(--n500);
   opacity: 0; transform: scale(.6); pointer-events: none; transition: opacity .2s var(--ease), transform .3s var(--ease), color .15s;
 }
 .cancel:hover { color: #fff; background: rgba(255,255,255,.06); }
 .go-wrap { position: relative; }
 .go-wrap.is-busy .cancel { opacity: 1; transform: none; pointer-events: auto; }
+
+/* auto download + status line */
+.opts { display: flex; align-items: center; justify-content: space-between; gap: 12px; min-height: 20px; padding: 0 2px; font-size: 12px; color: var(--n500); }
+.switch { display: inline-flex; align-items: center; gap: 8px; cursor: pointer; user-select: none; transition: color .2s; }
+.switch:hover { color: var(--n400); }
+.switch input { position: absolute; opacity: 0; width: 0; height: 0; }
+.knob { position: relative; width: 28px; height: 16px; border-radius: 8px; background: var(--n900); border: 1px solid var(--n800); transition: background .25s var(--ease), border-color .25s var(--ease); }
+.knob::after { content: ""; position: absolute; top: 2px; left: 2px; width: 10px; height: 10px; border-radius: 50%; background: var(--n500); transition: transform .3s var(--ease), background .25s; }
+.switch input:checked + .knob { background: rgba(152,187,108,.22); border-color: rgba(152,187,108,.6); }
+.switch input:checked + .knob::after { transform: translateX(12px); background: var(--spring-green); }
+.switch input:focus-visible + .knob { outline: 1px solid var(--crystal); outline-offset: 2px; }
+.hint { display: inline-flex; align-items: center; gap: 7px; font-variant-numeric: tabular-nums; text-align: right; opacity: 0; transform: translateY(2px); transition: opacity .3s var(--ease), transform .3s var(--ease), color .3s; }
+.hint.is-shown { opacity: 1; transform: none; }
+.hint.ok { color: var(--spring-green); }
+.go.is-done .go-edge { opacity: 0; }
+
+/* expiry timer: draining ring + rolling digits */
+.timer { display: inline-flex; align-items: center; gap: 6px; color: var(--spring-green); transition: color .6s var(--ease); animation: timer-in .5s var(--ease); }
+@keyframes timer-in { from { opacity: 0; transform: translateX(6px); filter: blur(3px); } }
+.timer.is-low { color: var(--carp); }
+.timer.is-critical { color: var(--red); }
+.ring { width: 14px; height: 14px; flex: none; transform: rotate(-90deg); }
+.timer.is-critical .ring { animation: pulse 1s var(--ease) infinite; }
+@keyframes pulse { 50% { transform: rotate(-90deg) scale(1.2); opacity: .6; } }
+.ring circle { fill: none; stroke: currentColor; stroke-width: 2; }
+.ring-bg { opacity: .18; }
+.ring-fg { stroke-linecap: round; stroke-dasharray: 40.84; stroke-dashoffset: calc(40.84 * (1 - var(--frac, 1))); transition: stroke-dashoffset 1s linear; }
+.digits { display: inline-flex; line-height: 1.3em; }
+.slot { display: inline-block; height: 1.3em; overflow: hidden; }
+.roll { display: block; transform: translateY(calc(var(--d, 0) * -1.3em)); transition: transform .55s cubic-bezier(.22, 1, .36, 1); }
+.roll i { display: block; height: 1.3em; font-style: normal; }
+.colon { display: inline-block; animation: blink 1s steps(1) infinite; }
+@keyframes blink { 50% { opacity: .3; } }
 
 .media {
   display: grid; grid-template-rows: 0fr; transition: grid-template-rows .4s var(--ease);
@@ -272,7 +329,7 @@ footer { margin-top: 64px; color: var(--n600); font-size: 12.5px; border-top: 1p
 <div class="toasts" id="toasts" aria-live="polite"></div>
 <main>
   <h1><span>y</span><span>t</span></h1>
-  <p class="sub reveal" style="--i:0">small http api over yt-dlp. metadata, download jobs with live progress over sse, any of the ~1800 sites yt-dlp supports.</p>
+  <p class="sub reveal" style="--i:0">small http api over yt-dlp. metadata, download jobs with live progress over sse, any of the ~1800 sites yt-dlp supports. plus <a href="#embed">x.mnl.rocks/&lt;link&gt;</a> to embed anything anywhere.</p>
   <nav class="links reveal" style="--i:1">
     <a href="https://github.com/giulianoo0/yt">github</a>
     <a href="/llms.txt">llms.txt</a>
@@ -305,10 +362,17 @@ footer { margin-top: 64px; color: var(--n600); font-size: 12.5px; border-top: 1p
       </div>
       <div class="media" id="media"><div class="media-inner"><div class="media-card"><img id="thumb" alt=""><div><strong id="mtitle"></strong><span id="mmeta"></span></div></div></div></div>
       <div class="go-wrap" id="gowrap">
-        <button class="go" id="go" type="submit"><span class="go-fill"></span><span class="go-label" id="golabel">download</span></button>
+        <button class="go" id="go" type="submit">
+          <span class="go-fill"></span><span class="go-edge"></span>
+          <span class="go-label" id="golabel"><svg class="dl" width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M8 2.5v8m0 0l-3.2-3.2M8 10.5l3.2-3.2M3 13.5h10" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg><b id="gopct">download</b><i id="godetail" hidden></i></span>
+        </button>
         <button class="cancel" id="cancel" type="button" aria-label="Cancel job">
           <svg width="14" height="14" viewBox="0 0 16 16" fill="none"><path d="M4 4l8 8m0-8l-8 8" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
         </button>
+      </div>
+      <div class="opts">
+        <label class="switch"><input type="checkbox" id="auto"><span class="knob"></span>auto download when ready</label>
+        <span class="hint" id="hint"><span id="hinttext"></span><span class="timer" id="timer" hidden><svg class="ring" viewBox="0 0 16 16" aria-hidden="true"><circle class="ring-bg" cx="8" cy="8" r="6.5"/><circle class="ring-fg" cx="8" cy="8" r="6.5"/></svg><span class="digits" id="digits"></span></span></span>
       </div>
     </form>
   </section>
@@ -400,7 +464,7 @@ es.addEventListener('end', () =&gt; es.close())</code></pre></div>
 
     <div class="route">
       <button class="route-head" type="button"><span class="m get">GET</span><span class="path">/v1/jobs/{id}/file</span><span class="desc">the result, range requests ok</span></button>
-      <div class="route-body"><div class="route-inner"><div class="route-content"><p><code>409</code> while not done, <code>?inline=1</code> for inline disposition. files expire after an hour.</p></div></div></div>
+      <div class="route-body"><div class="route-inner"><div class="route-content"><p><code>409</code> while not done, <code>?inline=1</code> for inline disposition. files are deleted 5 minutes after the job finishes.</p></div></div></div>
     </div>
 
     <div class="route">
@@ -411,6 +475,25 @@ es.addEventListener('end', () =&gt; es.close())</code></pre></div>
     <div class="route">
       <button class="route-head" type="button"><span class="m get">GET</span><span class="path">/v1/download?url=</span><span class="desc">sync: wait and stream the file</span></button>
       <div class="route-body"><div class="route-inner"><div class="route-content"><p>same options as query params. lists comma-separated, raw args as repeated <code>arg</code>. closing the connection cancels the job.</p></div></div></div>
+    </div>
+
+    <div class="route" id="embed">
+      <button class="route-head" type="button"><span class="m get">GET</span><span class="path">/v1/embed?url=</span><span class="desc">embed metadata + player</span></button>
+      <div class="route-body"><div class="route-inner"><div class="route-content">
+        <p>everything needed to embed a link: title, author, thumbnail, size and a player. youtube reuses youtube’s own player; x, tiktok and everything else get a progressive mp4 served by this instance.</p>
+        <p>or just put a link after the slash on <code>x.mnl.rocks</code> and paste that anywhere that unfurls links (discord, telegram, slack…):</p>
+        <div class="code"><pre><code>https://x.mnl.rocks/https://x.com/jack/status/20
+https://x.mnl.rocks/youtu.be/jNQXAC9IVRw</code></pre></div>
+        <div class="code"><pre><code>{
+  "type": "video",                      <span class="muted">youtube | video</span>
+  "provider": "Twitter", "title": "…", "author": "…", "thumbnail": "…", "width": 1280, "height": 720,
+  "embed_url":  "https://x.mnl.rocks/https://x.com/…",   <span class="muted">page with og:video / twitter:player tags</span>
+  "player_url": "…",                                       <span class="muted">iframe-able player</span>
+  "video_url":  "https://x.mnl.rocks/media?url=…",         <span class="muted">progressive mp4, range requests ok</span>
+  "native": true,                                          <span class="muted">resolved without yt-dlp</span>
+  "html": "&lt;video …&gt;"
+}</code></pre></div>
+      </div></div></div>
     </div>
 
     <div class="route">
@@ -578,15 +661,61 @@ const container = dropdown($('container'))
 let es = null
 let job = null
 let busy = false
+let mode = ''
+let lastP = -1
+let expiry = 0
 const go = $('go')
 const golabel = $('golabel')
+const gopct = $('gopct')
+const godetail = $('godetail')
+const hint = $('hint')
+const auto = $('auto')
+const FILE_TTL = 5 * 60 * 1000
 
-function setLabel(html) {
-  if (golabel.innerHTML === html) return
-  golabel.innerHTML = html
-  golabel.classList.remove('swap')
-  void golabel.offsetWidth
-  golabel.classList.add('swap')
+try { auto.checked = localStorage.getItem('yt.auto') === '1' } catch {}
+auto.addEventListener('change', () => { try { localStorage.setItem('yt.auto', auto.checked ? '1' : '0') } catch {} })
+
+// text nodes are patched in place; the swap animation only plays when the stage changes
+function setLabel(m, text, detail = '') {
+  if (gopct.textContent !== text) gopct.textContent = text
+  if (godetail.textContent !== detail) godetail.textContent = detail
+  godetail.hidden = !detail
+  if (m !== mode) {
+    mode = m
+    golabel.classList.remove('swap')
+    void golabel.offsetWidth
+    golabel.classList.add('swap')
+  }
+}
+
+function setProgress(p, determinate) {
+  const v = Math.max(0, Math.min(1, p))
+  if (Math.abs(v - lastP) >= 0.002 || v === 0 || v === 1) { go.style.setProperty('--p', v.toFixed(3)); lastP = v }
+  go.classList.toggle('is-determinate', determinate)
+}
+
+function setHint(text, ok, left = null) {
+  $('hinttext').textContent = text
+  hint.classList.toggle('is-shown', !!text)
+  hint.classList.toggle('ok', !!ok)
+  setTimer(left)
+}
+
+// odometer digits and a ring that drains over the file's lifetime
+function setTimer(ms) {
+  const timer = $('timer')
+  if (ms == null) { timer.hidden = true; return }
+  const s = Math.max(0, Math.ceil(ms / 1000))
+  const str = `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`
+  const digits = $('digits')
+  if (digits.childElementCount !== str.length) {
+    digits.innerHTML = [...str].map((c) => c === ':' ? '<span class="colon">:</span>' : `<span class="slot"><span class="roll">${[...'0123456789'].map((d) => `<i>${d}</i>`).join('')}</span></span>`).join('')
+  }
+  ;[...digits.children].forEach((el, i) => { if (str[i] !== ':') el.firstElementChild.style.setProperty('--d', str[i]) })
+  timer.style.setProperty('--frac', Math.min(1, ms / FILE_TTL).toFixed(4))
+  timer.classList.toggle('is-low', s <= 60)
+  timer.classList.toggle('is-critical', s <= 15)
+  timer.hidden = false
 }
 
 function setState(state) {
@@ -604,9 +733,11 @@ function reset() {
   es?.close()
   es = null
   job = null
-  go.style.setProperty('--p', 0)
+  expiry = 0
+  setProgress(0, false)
   setState('idle')
-  setLabel('download')
+  setLabel('idle', 'download')
+  setHint('')
 }
 
 function showMedia(m) {
@@ -618,15 +749,34 @@ function showMedia(m) {
   $('media').classList.add('is-shown')
 }
 
+function save() {
+  if (!job?.links?.file) return
+  location.href = job.links.file
+}
+
+// countdown until the server deletes the file
+setInterval(() => {
+  if (!expiry) return
+  const left = expiry - Date.now()
+  if (left <= 0) { reset(); $('media').classList.remove('is-shown'); toast('File expired', 'Files are deleted 5 minutes after they are ready.'); return }
+  setHint('ready · click to save · expires in', true, left)
+}, 1000)
+
 function render(j) {
+  const wasDone = job?.status === 'done'
   job = j
   showMedia(j.media)
   const p = j.progress || {}
   if (j.status === 'done') {
-    go.style.setProperty('--p', 1)
+    setProgress(1, true)
     setState('done')
-    setLabel(`<b>save ${esc(j.file.name.replace(/\s*\[[^\]]+\]/, ''))}</b><i>${mb(j.file.size)}</i>`)
-    toast('Ready', `${j.file.name} · ${mb(j.file.size)}`, 'ok')
+    setLabel('done', `save ${j.file.name.replace(/\s*\[[^\]]+\]/, '')}`, mb(j.file.size))
+    if (!wasDone) {
+      expiry = Date.parse(j.updated_at) + FILE_TTL
+      setHint(auto.checked ? 'ready · saving… · expires in' : 'ready · click to save · expires in', true, expiry - Date.now())
+      toast('Ready', `${j.file.name} · ${mb(j.file.size)}`, 'ok')
+      if (auto.checked) setTimeout(save, 300)
+    }
     return
   }
   if (j.status === 'failed' || j.status === 'canceled') {
@@ -635,23 +785,28 @@ function render(j) {
     if (j.status === 'failed') { toast('Download failed', msg); shake($('field')) }
     return
   }
-  go.style.setProperty('--p', (p.percent || 0) / 100)
-  if (j.stage === 'downloading') {
+  if (j.stage === 'downloading' && p.total_bytes > 0) {
+    setProgress((p.percent || 0) / 100, true)
     const parts = p.parts > 1 ? ` · ${p.part}/${p.parts}` : ''
-    setLabel(`<b>${Math.floor(p.percent)}%</b><i>${mb(p.downloaded_bytes)} / ${mb(p.total_bytes || 0)} · ${mb(p.speed || 0)}/s${parts}</i>`)
+    const eta = p.eta > 0 ? ` · ${p.eta}s left` : ''
+    setLabel('downloading', `${Math.floor(p.percent || 0)}%`, `${mb(p.downloaded_bytes)} / ${mb(p.total_bytes)} · ${mb(p.speed || 0)}/s${parts}${eta}`)
+    setHint(j.media?.extractor ? `fetching from ${j.media.extractor.toLowerCase()}` : 'downloading')
+  } else if (j.stage === 'processing') {
+    setProgress(1, false)
+    go.style.setProperty('--p', 1)
+    setLabel('processing', 'processing…', 'merging and remuxing')
+    setHint('almost there')
   } else {
-    setLabel(`<b>${j.stage || j.status}…</b>`)
+    setProgress(0, false)
+    setLabel(j.stage || j.status, `${j.stage || j.status}…`)
+    setHint(j.stage === 'queued' ? 'waiting for a free slot' : 'resolving the page')
   }
 }
 
 $('try').addEventListener('submit', async (e) => {
   e.preventDefault()
   if (busy) return
-  if (job?.status === 'done') {
-    location.href = job.links.file
-    setTimeout(reset, 600)
-    return
-  }
+  if (job?.status === 'done') { save(); return }
   const url = $('url').value.trim()
   if (!/^https?:\/\/\S+$/i.test(url)) {
     toast('Paste a full link', 'Something like https://youtu.be/…')
@@ -667,7 +822,9 @@ $('try').addEventListener('submit', async (e) => {
 
   $('media').classList.remove('is-shown')
   setState('busy')
-  setLabel('<b>starting…</b>')
+  setProgress(0, false)
+  setLabel('starting', 'starting…')
+  setHint('')
   try {
     const res = await fetch('/v1/jobs', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) })
     const j = await res.json()

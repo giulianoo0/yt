@@ -1,6 +1,6 @@
 # yt
 
-> Small HTTP API over yt-dlp. Resolve metadata for any of the ~1800 sites yt-dlp supports, run download jobs with live progress (SSE or polling) and fetch the resulting file. Base URL: https://yt.mnl.rocks. Source: https://github.com/giulianoo0/yt
+> Small HTTP API over yt-dlp. Resolve metadata for any of the ~1800 sites yt-dlp supports, run download jobs with live progress (SSE or polling) and fetch the resulting file. X/Twitter, Bluesky, Mastodon, Streamable, Twitch clips and direct video files are resolved natively (no yt-dlp, faster). Embed any link by prefixing it with https://x.mnl.rocks/. Base URL: https://yt.mnl.rocks. Source: https://github.com/giulianoo0/yt
 
 All responses are JSON unless noted. CORS is open. If the instance sets API_KEY, send `Authorization: Bearer <key>` (or `?key=<key>` where headers are impossible, e.g. EventSource).
 
@@ -82,7 +82,8 @@ curl -X POST https://yt.mnl.rocks/v1/jobs -H 'content-type: application/json' \
   "created_at", "updated_at"      RFC 3339
 }
 After "downloading" reaches ~100% the job may sit in "processing" (merge, remux, audio extraction) before "done".
-Finished jobs and their files expire after JOB_TTL (default 1h); jobs survive server restarts.
+Finished jobs and their files are deleted after JOB_TTL (default 5 minutes): fetch the file promptly. Jobs survive server restarts.
+Plain requests (no trim/subtitles/audio extraction/raw args, container empty or mp4) for X/Twitter, Bluesky, Mastodon, Streamable, Twitch clips and direct .mp4/.webm/.mov links skip yt-dlp entirely; media.extractor then names the site and the job is usually done within a second.
 
 ### GET /v1/jobs/{id}
 Poll the job. -> 200 Job
@@ -100,7 +101,7 @@ es.addEventListener('end', () => es.close())
 
 ### GET /v1/jobs/{id}/file[?inline=1]
 The downloaded file. Supports Range requests. Content-Disposition attachment (inline with inline=1).
--> 200/206 bytes, 409 {"error": {"code": "not_ready"}, "job": Job} while not done, 410 if the file expired.
+-> 200/206 bytes, 409 {"error": {"code": "not_ready"}, "job": Job} while not done, 410 if the file expired (5 minutes after done).
 
 ### DELETE /v1/jobs/{id}
 Cancel a running job or delete a finished one and its file. -> 204
@@ -108,6 +109,26 @@ Cancel a running job or delete a finished one and its file. -> 204
 ### GET /v1/download?url=URL[&quality=...&codec=...&container=...&audio_only=1&audio_format=...&format=...&sort=...&start=...&end=...&subtitles=en,pt&embed_metadata=1&embed_thumbnail=1&embed_chapters=1&sponsorblock_remove=sponsor&playlist_item=N&arg=--flag&arg=value]
 Synchronous: creates a job, waits, streams the file. Closing the connection cancels the job. No progress; use jobs for that.
 curl -OJ 'https://yt.mnl.rocks/v1/download?url=https://youtu.be/jNQXAC9IVRw&audio_only=1&audio_format=mp3'
+
+### GET /v1/embed?url=URL
+Everything needed to embed a link.
+-> 200 {
+  "type": "youtube" | "video",
+  "provider": "Twitter", "url": canonical page url, "id", "title", "author", "thumbnail", "duration", "width", "height",
+  "embed_url": "https://x.mnl.rocks/https://x.com/…",   page with og:video / twitter:player / oEmbed tags; paste it anywhere that unfurls links
+  "player_url": iframe-able player (youtube.com/embed/ID for youtube, the embed page otherwise),
+  "video_url": "https://x.mnl.rocks/media?url=…",         progressive mp4 with audio, Range requests ok (absent for youtube)
+  "native": true,                                          resolved without yt-dlp
+  "html": "<iframe …>" | "<video …>"
+}
+YouTube reuses YouTube's own player and thumbnails. Every other site gets a progressive mp4 served by this instance: proxied from the origin when a native extractor knows the site, produced by a shared 1080p h264 mp4 job otherwise (first request may take a few seconds).
+
+### Embed host: https://x.mnl.rocks/<url>
+Put any page url after the slash (scheme optional): https://x.mnl.rocks/x.com/jack/status/20 or https://x.mnl.rocks/https://youtu.be/jNQXAC9IVRw
+- GET /<url>: html page with Open Graph video tags and a player
+- GET /media?url=<url>: the progressive mp4 (inline, Range ok)
+- GET /oembed?url=<embed page url>: oEmbed json
+The same routes exist on the main host under /embed/<url>, /embed/media and /embed/oembed.
 
 ## Other
 - GET /openapi.json: OpenAPI 3.1 spec

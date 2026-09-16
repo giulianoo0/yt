@@ -1,7 +1,6 @@
 package main
 
 import (
-	"context"
 	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/json"
@@ -62,13 +61,26 @@ func newServer(cfg config, m *Manager) http.Handler {
 	v1.HandleFunc("GET /v1/jobs/{id}/events", s.events)
 	v1.HandleFunc("GET /v1/jobs/{id}/file", s.file)
 	v1.HandleFunc("GET /v1/download", s.download)
+	v1.HandleFunc("GET /v1/embed", s.embedJSON)
 	mux.Handle("/v1/", s.auth(v1))
 	mux.Handle("/admin/", s.adminRoutes())
 
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusNotFound, "not_found", "no route for "+r.Method+" "+r.URL.Path)
 	})
-	return s.cors(logged(mux))
+	embedHost := s.embedRouter("")
+	embedPath := s.embedRouter("/embed")
+	root := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case s.cfg.embedHost != "" && hostOf(r) == s.cfg.embedHost:
+			embedHost.ServeHTTP(w, r)
+		case r.URL.Path == "/embed" || strings.HasPrefix(r.URL.Path, "/embed/"):
+			embedPath.ServeHTTP(w, r)
+		default:
+			mux.ServeHTTP(w, r)
+		}
+	})
+	return s.cors(logged(root))
 }
 
 func (s *server) cors(next http.Handler) http.Handler {
@@ -280,10 +292,10 @@ func (s *server) file(w http.ResponseWriter, r *http.Request) {
 		})
 		return
 	}
-	serveFile(w, r, j, v)
+	serveFile(w, r, j, v, false)
 }
 
-func serveFile(w http.ResponseWriter, r *http.Request, j *Job, v JobView) {
+func serveFile(w http.ResponseWriter, r *http.Request, j *Job, v JobView, inline bool) {
 	f, err := os.Open(j.path)
 	if err != nil {
 		writeErr(w, http.StatusGone, "gone", "file is no longer available")
@@ -291,7 +303,7 @@ func serveFile(w http.ResponseWriter, r *http.Request, j *Job, v JobView) {
 	}
 	defer f.Close()
 	disp := "attachment"
-	if r.URL.Query().Get("inline") == "1" {
+	if inline || r.URL.Query().Get("inline") == "1" {
 		disp = "inline"
 	}
 	w.Header().Set("Content-Type", v.File.ContentType)
@@ -335,7 +347,7 @@ func (s *server) download(w http.ResponseWriter, r *http.Request) {
 				writeJSON(w, http.StatusUnprocessableEntity, map[string]any{"error": v.Error, "job": v})
 				return
 			}
-			serveFile(w, r, j, v)
+			serveFile(w, r, j, v, false)
 			return
 		}
 		select {
@@ -409,55 +421,22 @@ func (s *server) handleInfo(w http.ResponseWriter, r *http.Request) {
 	playlist := q.Get("playlist") == "true" || q.Get("playlist") == "1"
 	raw := q.Get("raw") == "1" || q.Get("raw") == "true"
 	s.ctl.stats.add("info_requests", 1)
-	key := fmt.Sprintf("%t|%t|%s", playlist, raw, u)
-	if body, ok := s.ctl.cache.get(key); ok {
+	key := fmt.Sprintf("J|%t|%s", playlist, u)
+	out, cached := s.ctl.cache.get(key)
+	if !cached {
+		if !s.admit(w, r, u) {
+			return
+		}
+		var herr *httpErr
+		if out, herr = s.ytdlpInfo(r.Context(), u, playlist); herr != nil {
+			herr.write(w)
+			return
+		}
+	} else {
 		s.ctl.stats.add("info_cache_hits", 1)
-		w.Header().Set("Content-Type", "application/json; charset=utf-8")
 		w.Header().Set("X-Cache", "hit")
-		w.Write(body)
-		return
 	}
-	if !s.admit(w, r, u) {
-		return
-	}
-	if !s.info.acquire(r.Context()) {
-		return
-	}
-	defer s.info.release()
-	account, cookies := "", ""
-	if isYouTube(u) {
-		id, path, wait, err := s.pool.Acquire()
-		if err != nil {
-			w.Header().Set("Retry-After", strconv.Itoa(max(1, int(wait.Seconds()))))
-			writeErr(w, http.StatusServiceUnavailable, "upstream_cooldown", err.Error())
-			return
-		}
-		account, cookies = id, path
-	}
-	ctx, cancel := context.WithTimeout(r.Context(), 90*time.Second)
-	defer cancel()
-	args := append([]string{"-J", "--no-warnings", "--flat-playlist"}, commonArgs(s.cfg, s.ctl.get(), cookies)...)
-	if !playlist {
-		args = append(args, "--no-playlist")
-	}
-	args = append(args, "--", u)
-	cmd := exec.CommandContext(ctx, s.cfg.bin, args...)
-	stderr := &tailBuffer{max: 8 << 10}
-	cmd.Stderr = stderr
-	out, err := cmd.Output()
-	if err != nil {
-		if ctx.Err() != nil {
-			writeErr(w, http.StatusGatewayTimeout, "timeout", "extraction timed out")
-			return
-		}
-		msg := stderr.lastError()
-		s.pool.NoteFailure(account, msg)
-		writeErr(w, http.StatusUnprocessableEntity, "ytdlp_error", msg)
-		return
-	}
-	ttl := time.Duration(s.ctl.get().InfoCacheTTL) * time.Second
 	if raw {
-		s.ctl.cache.put(key, out, ttl)
 		w.Header().Set("Content-Type", "application/json")
 		w.Write(out)
 		return
@@ -482,9 +461,6 @@ func (s *server) handleInfo(w http.ResponseWriter, r *http.Request) {
 	}
 	if in.Type == "playlist" && in.PlaylistCount == 0 {
 		in.PlaylistCount = len(in.Entries)
-	}
-	if body, err := json.Marshal(in); err == nil {
-		s.ctl.cache.put(key, append(body, '\n'), ttl)
 	}
 	writeJSON(w, http.StatusOK, in)
 }

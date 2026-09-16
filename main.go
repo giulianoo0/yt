@@ -30,6 +30,8 @@ type config struct {
 	maxFilesize    string
 	adminToken     string
 	clientIPHeader string
+	publicURL      string
+	embedHost      string
 	jobTTL         time.Duration
 	timeout        time.Duration
 	allowArgs      bool
@@ -77,7 +79,9 @@ func loadConfig() config {
 		maxFilesize:    os.Getenv("MAX_FILESIZE"),
 		adminToken:     os.Getenv("ADMIN_TOKEN"),
 		clientIPHeader: os.Getenv("CLIENT_IP_HEADER"),
-		jobTTL:         envDur("JOB_TTL", time.Hour),
+		publicURL:      strings.TrimRight(os.Getenv("PUBLIC_URL"), "/"),
+		embedHost:      strings.ToLower(os.Getenv("EMBED_HOST")),
+		jobTTL:         envDur("JOB_TTL", 5*time.Minute),
 		timeout:        envDur("JOB_TIMEOUT", 30*time.Minute),
 		allowArgs:      envBool("ALLOW_ARGS", true),
 		allowPrivate:   envBool("ALLOW_PRIVATE", false),

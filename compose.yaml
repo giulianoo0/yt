@@ -22,6 +22,8 @@ services:
       - "127.0.0.1:8190:8080"
     environment:
       CLIENT_IP_HEADER: X-Real-IP
+      PUBLIC_URL: https://yt.mnl.rocks
+      EMBED_HOST: x.mnl.rocks
     pids_limit: 256
     mem_limit: 2g
     cpus: 2

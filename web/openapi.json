@@ -491,6 +491,55 @@
           }
         }
       }
+    },
+    "/v1/embed": {
+      "get": {
+        "summary": "Embed metadata and player urls",
+        "description": "Everything needed to embed a link: title, author, thumbnail, size, an embed page with og:video tags (https://x.mnl.rocks/<url>), a player url and a progressive mp4 url. YouTube reuses YouTube's own player; other sites get an mp4 served by this instance, resolved natively for X/Twitter, Bluesky, Mastodon, Streamable, Twitch clips and direct files.",
+        "parameters": [
+          {
+            "name": "url",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uri"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Embed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Embed"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid url",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "yt-dlp could not extract the page",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
     }
   },
   "components": {
@@ -914,6 +963,80 @@
             ]
           },
           "message": {
+            "type": "string"
+          }
+        }
+      },
+      "Embed": {
+        "type": "object",
+        "required": [
+          "type",
+          "provider",
+          "url",
+          "embed_url",
+          "player_url",
+          "native",
+          "html"
+        ],
+        "properties": {
+          "type": {
+            "type": "string",
+            "enum": [
+              "youtube",
+              "video"
+            ]
+          },
+          "provider": {
+            "type": "string"
+          },
+          "url": {
+            "type": "string",
+            "format": "uri",
+            "description": "canonical page url"
+          },
+          "id": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "author": {
+            "type": "string"
+          },
+          "thumbnail": {
+            "type": "string",
+            "format": "uri"
+          },
+          "duration": {
+            "type": "number",
+            "description": "seconds"
+          },
+          "width": {
+            "type": "integer"
+          },
+          "height": {
+            "type": "integer"
+          },
+          "embed_url": {
+            "type": "string",
+            "format": "uri",
+            "description": "page with og:video / twitter:player tags"
+          },
+          "player_url": {
+            "type": "string",
+            "format": "uri",
+            "description": "iframe-able player"
+          },
+          "video_url": {
+            "type": "string",
+            "format": "uri",
+            "description": "progressive mp4 with audio, supports Range; absent for youtube"
+          },
+          "native": {
+            "type": "boolean",
+            "description": "resolved without yt-dlp"
+          },
+          "html": {
             "type": "string"
           }
         }
